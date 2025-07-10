@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "playerwaypoints",
+  "version": "${version}",
+  "name": "PlayerWaypoints",
+  "description": "Server-side custom waypoints for the Location Bar",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/playerwaypoints/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.feintha.playerwaypoints.SVPlayerWaypoints"
+    ]
+  },
+  "mixins": [
+    "playerwaypoints.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
