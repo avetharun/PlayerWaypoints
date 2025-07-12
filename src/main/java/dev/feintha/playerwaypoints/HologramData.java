@@ -30,7 +30,7 @@ public abstract class HologramData<T, E extends AbstractElement> {
 
     public abstract void updateElement();
     public Vec3d getPosition(Vec3d origin, int line) {
-        return origin.offset(Direction.UP, (-line * 0.25f));
+        return origin.offset(Direction.UP, (line * 0.25f));
     }
     public static abstract class DisplayHologramData<T, E extends DisplayElement> extends HologramData<T, E>{
         public DisplayEntity.BillboardMode billboardMode = DisplayEntity.BillboardMode.VERTICAL;
@@ -78,6 +78,7 @@ public abstract class HologramData<T, E extends AbstractElement> {
             element = new MarkerElement();
             element.getDataTracker().set(EntityTrackedData.CUSTOM_NAME, Optional.ofNullable(data));
             element.getDataTracker().set(EntityTrackedData.NAME_VISIBLE, true);
+            element.setInvisible(true);
             return element;
         }
 
@@ -90,6 +91,7 @@ public abstract class HologramData<T, E extends AbstractElement> {
         public void updateElement() {
             element.getDataTracker().set(EntityTrackedData.CUSTOM_NAME, Optional.ofNullable(data));
             element.getDataTracker().set(EntityTrackedData.NAME_VISIBLE, true);
+            element.setInvisible(true);
 
         }
     }

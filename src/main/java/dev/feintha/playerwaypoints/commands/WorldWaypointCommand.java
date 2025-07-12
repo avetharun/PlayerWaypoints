@@ -27,6 +27,7 @@ import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ExecuteCommand;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -40,19 +41,36 @@ import java.util.concurrent.CompletableFuture;
 
 public class WorldWaypointCommand extends AbstractCommandRegistrar {
     static int globalWaypointExecutor(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
-        int color = 0xffdb7991;
-        RegistryKey<WaypointStyle> style = WaypointStyles.DEFAULT;
-        ServerWorld world = DimensionArgumentType.getDimensionArgument(context, "world");
-        Vec3d pos = Vec3ArgumentType.getVec3(context, "pos");
-        Identifier id = IdentifierArgumentType.getIdentifier(context, "id");
-        double range = 6e7;
-        try { color = HexColorArgumentType.getArgbColor(context, "color"); } catch (IllegalArgumentException ignored) {}
-        try { style = WaypointStyles.of(StringArgumentType.getString(context, "style")); } catch (IllegalArgumentException ignored) {}
-        try { range = DoubleArgumentType.getDouble(context, "range"); } catch (IllegalArgumentException ignored) {}
-        var wp = PlayerWaypointManager.addGlobalWaypoint(world, BlockPos.ofFloored(pos), id);
-        wp.setWaypointColor(color);
-        wp.setWaypointStyle(style);
-        wp.setPosition(pos);
+        try {
+            int color = 0xffdb7991;
+            RegistryKey<WaypointStyle> style = WaypointStyles.DEFAULT;
+            ServerWorld world = DimensionArgumentType.getDimensionArgument(context, "world");
+            Vec3d pos = Vec3ArgumentType.getVec3(context, "pos");
+            Identifier id = IdentifierArgumentType.getIdentifier(context, "id");
+            double range = 6e7;
+            try {
+                color = HexColorArgumentType.getArgbColor(context, "color");
+            } catch (IllegalArgumentException ignored) {
+            }
+            try {
+                style = WaypointStyles.of(StringArgumentType.getString(context, "style"));
+            } catch (IllegalArgumentException ignored) {
+            }
+            try {
+                range = DoubleArgumentType.getDouble(context, "range");
+            } catch (IllegalArgumentException ignored) {
+            }
+            var wp = PlayerWaypointManager.addGlobalWaypoint(world, pos, id);
+            wp.setWaypointColor(color);
+            wp.setWaypointStyle(style);
+            wp.setPosition(pos);
+            for (ServerPlayerEntity worldPlayer : world.getPlayers()) {
+                wp.startWatching(worldPlayer, worldPlayer.networkHandler::sendPacket);
+            }
+        } catch (RuntimeException e) {
+            e.printStackTrace();
+            throw new RuntimeException(e);
+        }
         return 0;
     }
     public static class WaypointStyleArgumentType implements ArgumentType<Identifier> {

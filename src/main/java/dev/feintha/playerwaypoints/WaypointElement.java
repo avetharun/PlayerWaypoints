@@ -1,13 +1,10 @@
 package dev.feintha.playerwaypoints;
 
-import eu.pb4.polymer.virtualentity.api.VirtualEntityUtils;
+import com.google.common.collect.ImmutableSet;
 import eu.pb4.polymer.virtualentity.api.elements.*;
 import it.unimi.dsi.fastutil.ints.IntList;
-import net.minecraft.entity.attribute.EntityAttributeInstance;
-import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.network.listener.ClientPlayPacketListener;
 import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.s2c.play.EntityAttributesS2CPacket;
 import net.minecraft.network.packet.s2c.play.WaypointS2CPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -19,17 +16,28 @@ import net.minecraft.util.math.*;
 import net.minecraft.world.waypoint.*;
 import org.jetbrains.annotations.NotNull;
 
-import java.time.Instant;
+import java.sql.Array;
 import java.util.*;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 
 public class WaypointElement extends AbstractElement implements StringIdentifiable {
+
+    public WaypointElement(@NotNull ServerWorld world, Identifier id) {
+        super();
+        this.serverWorld = world;
+        this.identifier = id;
+        lastSyncedPos = Vec3d.ZERO;
+    }
     UUID uuid = UUID.randomUUID();
     Identifier identifier;
     Set<ServerPlayerEntity> observers = new HashSet<>();
+
+    public Set<ServerPlayerEntity> getObservers() {
+        return ImmutableSet.copyOf(observers);
+    }
+
     double maxDistance = 6e7;
     public Identifier getWaypointId() {
         return identifier;
@@ -46,36 +54,50 @@ public class WaypointElement extends AbstractElement implements StringIdentifiab
     ArrayList<HologramData<?, ?>> hologramDataList = new ArrayList<>();
     ArrayList<HologramData<?, ?>> hologram_titles_last = new ArrayList<>();
     public void setHologram(List<Text> hologram) {
+        stopWatchingHolograms();
         this.hologramDataList = new ArrayList<>(hologram.stream().map(HologramData.MarkerHologramData::new).toList());
-        updateHologram();
+        startWatchingHolograms();
     }
     public void setHologram(HologramData<?, ?>... hologramData) {
+        stopWatchingHolograms();
         this.hologramDataList = new ArrayList<>(List.of(hologramData));
-        updateHologram();
+        startWatchingHolograms();
+    }
+    public Vec3d getHologramElementPosition(Vec3d origin, int line, HologramData<?,?> data) {
+        return data.getPosition(origin, line);
+    }
+    public void startWatchingHolograms() {
+        for (HologramData<?, ?> d : hologramDataList) {
+            observers.forEach(player -> {
+                d.element.startWatching(player, player.networkHandler::sendPacket);
+            });
+        }
+    }
+    public void stopWatchingHolograms() {
+        for (HologramData<?, ?> d : hologramDataList) {
+            observers.forEach(player -> {
+                d.element.stopWatching(player, player.networkHandler::sendPacket);
+            });
+        }
     }
     public void updateHologram() {
-        var removedElements = new ArrayList<>(hologram_titles_last);
-        removedElements.removeAll(hologramDataList);
-        for (HologramData<?, ?> removedElement : removedElements) {
-            observers.forEach(player -> removedElement.element.stopWatching(player, player.networkHandler::sendPacket));
-        }
-        for (HologramData<?, ?> hologramElement : hologramDataList) {
-            getHolder().addElement(hologramElement.element);
-            observers.forEach(player -> hologramElement.element.startWatching(player, player.networkHandler::sendPacket));
-        }
         for (HologramData<?, ?> hologramData : hologramDataList) {
             hologramData.updateElement();
         }
-        this.hologram_titles_last = this.hologramDataList;
+        for (int i = hologramDataList.size() - 1; i >= 0; i--) {
+            var hologram = hologramDataList.get(i);
+            hologram.element.setOffset(getHologramElementPosition(getCurrentPos(), i, hologram));
+        }
     }
 
-    public void removeTitle() {
-        hologramDataList = new ArrayList<>();
-        updateHologram();
+    public void removeHologram(HologramData<?, ?> hologramData) {
+        stopWatchingHolograms();
+        hologramDataList.remove(hologramData);
+        startWatchingHolograms();
     }
-    Function<Integer, Vec3d> hologramPositionGetter;
-    public Vec3d getHologramPosition(int line) {
-        return getCurrentPos().offset(Direction.UP, (-line * 0.25f)).offset(Direction.EAST, Math.sin(Instant.now().toEpochMilli() * 0.001));
+    public void removeHolograms() {
+        stopWatchingHolograms();
+        hologramDataList = new ArrayList<>();
     }
     @Override
     public Vec3d getCurrentPos() {
@@ -84,19 +106,16 @@ public class WaypointElement extends AbstractElement implements StringIdentifiab
     void sendUpdate() {
         assert getHolder() != null;
         observers.forEach(spe -> {
-
-            Vec3d vec3d = spe.getPos().subtract(getPosition()).rotateYClockwise();
-            float f = (float) MathHelper.atan2(vec3d.getZ(), vec3d.getX());
-            spe.networkHandler.sendPacket(WaypointS2CPacket.updateAzimuth(uuid, getConfig(spe), f));
-            for (int i = 0; i < hologramDataList.size(); i++) {
-                var hologram = hologramDataList.get(i);
-                hologram.element.setOffset(hologram.getPosition(getCurrentPos(), i));
+            spe.networkHandler.sendPacket(WaypointS2CPacket.untrack(uuid));
+            if (shouldTransmit(spe)) {
+                spe.networkHandler.sendPacket(WaypointS2CPacket.trackAzimuth(this.uuid, getConfig(spe), getAzimuth(spe)));
             }
         });
+
+        updateHologram();
     }
     public void setPosition(Vec3d waypointPos) {
         this.waypointPos = waypointPos;
-        sendUpdate();
     }
 
     @Override
@@ -107,16 +126,15 @@ public class WaypointElement extends AbstractElement implements StringIdentifiab
     @Override
     public void setOffset(Vec3d offset) {
         setPosition(offset);
-        sendUpdate();
     }
     public Vec3d getPosition() {
         return waypointPos;
     }
 
     public RegistryKey<WaypointStyle> getWaypointStyle() { return waypointStyle; }
-    public void setWaypointStyle(RegistryKey<WaypointStyle> waypointStyle) { this.waypointStyle = waypointStyle; sendUpdate();}
+    public void setWaypointStyle(RegistryKey<WaypointStyle> waypointStyle) { this.waypointStyle = waypointStyle; }
 
-    public void setWaypointColor(int color) { this.color = color; sendUpdate();}
+    public void setWaypointColor(int color) { this.color = color; }
     public int getWaypointColor() { return color; }
 
     public Waypoint.Config getConfig(ServerPlayerEntity player) {
@@ -125,32 +143,38 @@ public class WaypointElement extends AbstractElement implements StringIdentifiab
         c.style = waypointStyle == null ? WaypointStyles.BOWTIE : waypointStyle;
         return c;
     }
-    EntityAttributeInstance RANGE_ATTR;
-    public WaypointElement(@NotNull ServerWorld world, Identifier id) {
-        super();
-        this.serverWorld = world;
-        lastSyncedPos = Vec3d.ZERO;
-    }
     public void setWaypointTransmitRange(double range) {
         this.maxDistance = range;
     }
     public boolean isPlayerInRange(ServerPlayerEntity player) {
         return player.squaredDistanceTo(getCurrentPos()) <= maxDistance * maxDistance;
     }
+    public boolean shouldTransmit(ServerPlayerEntity player) {
+        return true;
+    }
     @Override
     public void startWatching(ServerPlayerEntity player, Consumer<Packet<ClientPlayPacketListener>> packetConsumer) {
         observers.add(player);
-        if (isPlayerInRange(player)) {
-            Vec3d vec3d = player.getPos().subtract(getPosition()).rotateYClockwise();
-            float f = (float) MathHelper.atan2(vec3d.getZ(), vec3d.getX());
-            packetConsumer.accept(WaypointS2CPacket.trackAzimuth(this.uuid, new Waypoint.Config(), f));
+        if (shouldTransmit(player)) {
+            packetConsumer.accept(WaypointS2CPacket.trackAzimuth(this.uuid, getConfig(player), getAzimuth(player)));
+        }
+
+        for (HologramData<?, ?> hologramElement : hologramDataList) {
+            hologramElement.element.startWatching(player,packetConsumer);
         }
     }
-
+    public float getAzimuth(ServerPlayerEntity player) {
+        Vec3d vec3d = player.getPos().subtract(getPosition()).rotateYClockwise();
+        return (float) MathHelper.atan2(vec3d.getZ(), vec3d.getX());
+    }
     @Override
     public void stopWatching(ServerPlayerEntity player, Consumer<Packet<ClientPlayPacketListener>> packetConsumer) {
         packetConsumer.accept(WaypointS2CPacket.untrack(this.getUuid()));
         observers.remove(player);
+
+        for (HologramData<?, ?> hologramElement : hologramDataList) {
+            hologramElement.element.stopWatching(player,packetConsumer);
+        }
     }
 
     public UUID getUuid() {
@@ -162,21 +186,28 @@ public class WaypointElement extends AbstractElement implements StringIdentifiab
 
     }
 
-    boolean isFirstTick = true;
     @Override
     public void tick() {
-        isFirstTick = false;
+        if (getHolder() == null) {
+            var h = SVPlayerWaypoints.ensureHolder(getWorld());
+            setHolder(h);
+            h.addElement(this);
+        }
         assert lastSyncedPos != null;
         assert getHolder() != null;
         updateLastSyncedPos();
         sendUpdate();
-    }
-    public BlockPos getBlockPos() {
-        return new BlockPos((int) waypointPos.x, (int) waypointPos.y, (int) waypointPos.z);
+
     }
 
     @Override
     public String asString() {
         return this.getUuid().toString();
+    }
+    public double getDistanceTo(ServerPlayerEntity player) {
+        return player.getPos().distanceTo(getCurrentPos());
+    }
+    public double getSquaredDistanceTo(ServerPlayerEntity player) {
+        return player.getPos().squaredDistanceTo(getCurrentPos());
     }
 }
